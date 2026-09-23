@@ -1,6 +1,269 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b1020"><link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icons/icon-192.png"><link rel="stylesheet" href="css/app.css"><title>MoneyFlow</title></head><body><div class="app"><header><div class="brand"><b>₿</b><span><strong>MoneyFlow</strong><small>Personal Finance • BI</small></span></div><div><button id="install" class="ghost hidden" type="button">Install</button><button id="theme" type="button">☾</button><button data-page="settings" type="button">⚙</button></div></header><main>
-<section id="home" class="page active"><div class="hero"><div><small id="greet">WELCOME</small><h1 id="greetTitle">Welcome back 👋</h1><p id="focusMsg">Your money story will appear here.</p></div><input id="month" type="month"></div><div class="focus"><i>✦</i><div><small>Today's focus</small><b id="focusTitle">Start your money log</b><span id="focusDetail">Add your first transaction.</span></div></div><div class="balance"><div><span>Remaining money</span><em id="pill">On track</em></div><strong id="remaining">0 MMK</strong><small>Income minus expenses, loans and credit paybacks</small><div class="progress"><i id="progress"></i></div><div><small id="committed">0% committed</small><small id="saving">0% savings rate</small></div></div><div class="stats"><article>Income<b id="income">0 MMK</b><small>Money in</small></article><article>Expenses<b id="expense">0 MMK</b><small>Daily spending</small></article><article>Loans<b id="loan">0 MMK</b><small>Loan payments</small></article><article>Credit<b id="credit">0 MMK</b><small>Paybacks</small></article></div><h2>Quick actions</h2><div class="actions"><button type="button" data-add="expense">−<b>Add Expense</b><small>Food, fuel, family</small></button><button type="button" data-add="income">+<b>Add Income</b><small>Salary, bonus</small></button><button type="button" data-add="loan">↘<b>Loan Payment</b><small>New loan</small></button><button type="button" data-add="payback">↙<b>Loan Payback</b><small>Repayment</small></button><button type="button" data-add="credit">↗<b>Credit Payback</b><small>Card / credit</small></button></div><div class="panel"><div class="head"><h2>Spending breakdown</h2><button type="button" data-page="dashboard">Open BI</button></div><div id="breakdown"></div></div><div class="panel"><div class="head"><h2>Recent activity</h2><button type="button" data-page="transactions">See all</button></div><div id="recent"></div></div></section>
-<section id="dashboard" class="page"><small>MONEY INTELLIGENCE</small><h1>Dashboard</h1><p>Money flowing trend + Focus BI reports</p><div class="bi"><article>Cash flow<b id="cashflow">0 MMK</b></article><article>Top spending<b id="topSpend">—</b><small id="topAmt">0 MMK</small></article><article>Largest activity<b id="largest">—</b><small id="largestAmt">0 MMK</small></article><article>Entries<b id="rhythm">0</b></article></div><div class="panel"><div class="head"><h2>Money flowing trend</h2><small>Daily inflow vs outflow</small></div><canvas id="chart"></canvas></div><div class="panel"><h2>Focus BI</h2><div id="focusBI"></div></div><div class="panel"><h2>Loan &amp; Payback BI</h2><div id="loanBI"></div></div><div class="panel"><h2>Category pulse</h2><div id="pulse"></div></div><div class="panel"><div class="head"><h2>Sync status</h2><b id="syncStatus">Local only</b></div><p id="syncText">Configure Google Apps Script in Settings.</p></div></section>
-<section id="add" class="page"><button type="button" data-page="home">←</button><small>TRANSACTION</small><h1 id="formTitle">Add Expense</h1><div class="tabs"><button type="button" data-type="expense">Expense</button><button type="button" data-type="income">Income</button><button type="button" data-type="loan">Loan</button><button type="button" data-type="payback">Payback</button><button type="button" data-type="credit">Credit</button></div><form id="form" class="panel"><label>Amount<div class="amount"><span>MMK</span><input id="amount" type="number" min="1" required></div></label><div class="two"><label>Date<input id="date" type="date" required></label><label>Category<select id="category"></select></label></div><label id="loanField" hidden>Loan to repay<select id="loanSelect"></select></label><label>Note<input id="note" placeholder="What was this for?"></label><button class="primary" type="submit">Save transaction</button></form></section>
-<section id="transactions" class="page"><button type="button" data-page="home">←</button><small>HISTORY</small><h1>Transactions</h1><div class="panel"><div class="head"><h2 id="txCount">Activity</h2><button id="clear" class="danger" type="button">Clear all</button></div><div class="table"><table><thead><tr><th>Date</th><th>Activity</th><th>Amount</th><th></th></tr></thead><tbody id="rows"></tbody></table></div></div></section>
-<section id="settings" class="page"><button type="button" data-page="home">←</button><small>CUSTOMIZE</small><h1>Settings</h1><div class="panel"><div class="head"><h2>Dark mode</h2><button id="switch" class="switch" type="button"><i></i></button></div></div><div class="panel"><h2>Categories</h2><div id="cats"></div></div><div class="panel"><h2>Add category</h2><div class="two"><input id="newCat" placeholder="Category name"><select id="newType"><option value="expense">Expense</option><option value="income">Income</option><option value="loan">Loan</option><option value="credit">Credit Payback</option></select></div><button id="addCat" class="primary" type="button">Add category</button></div><div class="panel"><h2>Google Sheets sync</h2><p>Ready for Google Apps Script as a data source.</p><input id="syncUrl" placeholder="Apps Script Web App /exec URL"><div class="sync"><button id="test" type="button">Test</button><button id="pull" type="button">Pull</button><button id="push" class="primary" type="button">Push</button></div><small>Use the included google-apps-script/Code.gs.</small></div><div class="panel"><button id="export" type="button">Export backup JSON</button><label class="file">Import backup JSON<input id="import" type="file" accept=".json"></label></div></section></main><nav><button type="button" data-page="home">⌂<small>Home</small></button><button type="button" data-page="dashboard">◔<small>Dashboard</small></button><button type="button" data-add="expense" class="add">＋</button><button type="button" data-page="transactions">☷<small>History</small></button><button type="button" data-page="settings">⚙<small>Settings</small></button></nav><div id="toast"></div></div><script src="js/app.js"></script><script src="js/loan-bi.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0b1020" />
+  <title>MoneyFlow Budget App</title>
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <small class="eyebrow">MONEYFLOW</small>
+        <h1>Budget Planner</h1>
+      </div>
+      <button id="themeToggle" class="ghost-btn" type="button" aria-label="Toggle theme">🌙</button>
+    </header>
+
+    <main class="main-panel">
+      <section id="home" class="page active">
+        <div class="panel hero-card">
+          <div>
+            <small id="greet" class="eyebrow">WELCOME</small>
+            <h2 id="greetTitle">Welcome back 👋</h2>
+            <p id="focusMsg">Your money story will appear here.</p>
+          </div>
+          <div class="hero-badge">
+            <span>Month</span>
+            <strong id="homeMonth">2026-09</strong>
+          </div>
+        </div>
+
+        <div class="summary-grid">
+          <article class="panel stat-card income">
+            <small>Income</small>
+            <strong id="homeIncome">0 MMK</strong>
+          </article>
+          <article class="panel stat-card expense">
+            <small>Expense</small>
+            <strong id="homeExpense">0 MMK</strong>
+          </article>
+          <article class="panel stat-card net">
+            <small>Net</small>
+            <strong id="homeNet">0 MMK</strong>
+          </article>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <h3>Recent activity</h3>
+            <button type="button" class="link-btn" data-page="transactions">View all</button>
+          </div>
+          <div id="recentTransactions" class="list-stack"></div>
+        </div>
+      </section>
+
+      <section id="dashboard" class="page">
+        <div class="section-head">
+          <div>
+            <small class="eyebrow">BUDGET BI</small>
+            <h2>Budget vs spending</h2>
+          </div>
+          <label class="inline-select">
+            <span>Month</span>
+            <select id="monthSelect"></select>
+          </label>
+        </div>
+
+        <div class="budget-summary-grid">
+          <article class="panel stat-card budget-total">
+            <small>Total budget</small>
+            <strong id="budgetTotal">0 MMK</strong>
+          </article>
+          <article class="panel stat-card budget-spent">
+            <small>Total spent</small>
+            <strong id="budgetSpent">0 MMK</strong>
+          </article>
+          <article class="panel stat-card budget-remaining">
+            <small>Remaining</small>
+            <strong id="budgetRemaining">0 MMK</strong>
+          </article>
+          <article class="panel stat-card budget-used">
+            <small>Used</small>
+            <strong id="budgetUsedPct">0%</strong>
+          </article>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <h3>Budget health</h3>
+          </div>
+          <div id="budgetAlerts" class="alert-list"></div>
+        </div>
+
+        <div class="dashboard-grid">
+          <div class="panel">
+            <div class="section-head">
+              <h3>Category performance</h3>
+            </div>
+            <div id="budgetBreakdown" class="budget-breakdown"></div>
+          </div>
+
+          <div class="panel">
+            <div class="section-head">
+              <h3>Money flow</h3>
+            </div>
+            <div id="focusBI" class="focus-bi"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="add" class="page">
+        <div class="panel form-panel">
+          <div class="section-head compact">
+            <button type="button" class="back-btn" data-page="home">←</button>
+            <div>
+              <small class="eyebrow">TRANSACTION</small>
+              <h2 id="formTitle">Add Expense</h2>
+            </div>
+          </div>
+
+          <div class="tab-row" role="tablist" aria-label="Entry type">
+            <button type="button" class="tab active" data-type="expense">Expense</button>
+            <button type="button" class="tab" data-type="income">Income</button>
+            <button type="button" class="tab" data-type="credit">Credit</button>
+          </div>
+
+          <form id="transactionForm" class="money-form">
+            <div class="form-grid">
+              <label>
+                <span>Amount</span>
+                <input id="amount" type="number" min="1" step="1" placeholder="50000" required />
+              </label>
+
+              <label>
+                <span>Date</span>
+                <input id="date" type="date" required />
+              </label>
+
+              <label>
+                <span>Category</span>
+                <select id="category"></select>
+              </label>
+
+              <label>
+                <span>Note</span>
+                <input id="note" type="text" maxlength="80" placeholder="Groceries, Salary, etc." />
+              </label>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="primary-btn">Save record</button>
+              <button type="button" class="ghost-btn" id="clearTransactionsBtn">Clear all</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="panel form-panel budget-panel">
+          <div class="section-head compact">
+            <div>
+              <small class="eyebrow">BUDGET</small>
+              <h2>Set monthly budget</h2>
+            </div>
+          </div>
+
+          <div class="budget-form-grid">
+            <label>
+              <span>Category</span>
+              <select id="budgetCategory"></select>
+            </label>
+
+            <label>
+              <span>Amount</span>
+              <input id="budgetAmount" type="number" min="1000" step="1000" placeholder="250000" />
+            </label>
+
+            <label>
+              <span>Alert %</span>
+              <input id="budgetThreshold" type="number" min="1" max="100" step="1" value="80" />
+            </label>
+
+            <label>
+              <span>Month</span>
+              <input id="budgetMonth" type="month" />
+            </label>
+
+            <label>
+              <span>Due date</span>
+              <input id="budgetDueDate" type="date" />
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" id="addBudgetBtn" class="primary-btn">Add budget</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="transactions" class="page">
+        <div class="panel">
+          <div class="section-head compact">
+            <button type="button" class="back-btn" data-page="home">←</button>
+            <div>
+              <small class="eyebrow">HISTORY</small>
+              <h2>Transactions</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Category</th>
+                  <th>Note</th>
+                  <th>Amount</th>
+                </tr>
+              </thead>
+              <tbody id="transactionRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="settings" class="page">
+        <div class="panel form-panel">
+          <div class="section-head compact">
+            <button type="button" class="back-btn" data-page="home">←</button>
+            <div>
+              <small class="eyebrow">SETTINGS</small>
+              <h2>Customize</h2>
+            </div>
+          </div>
+
+          <div class="settings-list">
+            <div class="setting-row">
+              <div>
+                <strong>Dark mode</strong>
+                <small>Use a low-glare theme</small>
+              </div>
+              <button type="button" id="switchTheme" class="toggle-pill" aria-label="Toggle dark mode">
+                <span class="toggle-knob"></span>
+              </button>
+            </div>
+
+            <label class="sync-field">
+              <span>Google Sheets sync URL</span>
+              <input id="syncUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec" />
+            </label>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Main navigation">
+      <button type="button" class="nav-btn active" data-page="home">Home</button>
+      <button type="button" class="nav-btn" data-page="dashboard">Dashboard</button>
+      <button type="button" class="nav-btn" data-page="add">Add</button>
+      <button type="button" class="nav-btn" data-page="transactions">History</button>
+      <button type="button" class="nav-btn" data-page="settings">Settings</button>
+    </nav>
+  </div>
+
+  <div id="toast" class="toast" aria-live="polite"></div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
