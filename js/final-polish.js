@@ -1,28 +1,203 @@
 (() => {
   'use strict';
-  const KEY='moneyflow-v3', $=id=>document.getElementById(id), now=new Date(), todayISO=now.toISOString().slice(0,10);
-  const num=v=>Number(String(v??'').replace(/,/g,''))||0, money=v=>`${Math.round(num(v)).toLocaleString()} MMK`, monthOf=v=>String(v||'').slice(0,7);
-  const read=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch(_){return {}}};
-  const monthName=m=>new Date(`${m}-01T00:00:00`).toLocaleString('en',{month:'long',year:'numeric'});
-  const month=state=>state.reportMonth||todayISO.slice(0,7);
-  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const toast=m=>{const e=$('toast');if(!e)return;e.textContent=m;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),2400)};
-  function availableMonths(s){return [...new Set([month(s),...(s.transactions||[]).map(t=>monthOf(t.date)),...(s.budgets||[]).map(b=>monthOf(b.month))].filter(Boolean))].sort()}
-  function changeMonth(value){const s=read();s.reportMonth=value;localStorage.setItem(KEY,JSON.stringify(s));const select=$('monthSelect');if(select){select.value=value;select.dispatchEvent(new Event('change',{bubbles:true}))}window.dispatchEvent(new CustomEvent('moneyflow:monthchange',{detail:{month:value}}))}
-  function injectMonthPicker(){const badge=document.querySelector('#home .month-badge');if(badge&&!$('homeMonthSelect')){badge.innerHTML='<label class="month-picker"><span>Reporting month</span><select id="homeMonthSelect" aria-label="Select home reporting month"></select></label>';$('homeMonthSelect').addEventListener('change',e=>changeMonth(e.target.value))}}
-  function syncMonthPickers(){const s=read(),m=month(s),html=availableMonths(s).map(x=>`<option value="${esc(x)}">${esc(monthName(x))}</option>`).join('');['homeMonthSelect','monthSelect'].forEach(id=>{const e=$(id);if(e){e.innerHTML=html;e.value=m}})}
-  function totals(s,m){return (s.transactions||[]).filter(t=>monthOf(t.date)===m).reduce((a,t)=>{const n=num(t.amount);if(t.type==='income')a.income+=n;if(t.type==='expense')a.expense+=n;if(t.type==='credit')a.credit+=n;return a},{income:0,expense:0,credit:0})}
-  function currentDailyBudget(s,m){const t=(s.transactions||[]).filter(x=>monthOf(x.date)===m),normalIncome=t.filter(x=>x.type==='income'&&!x.loanId).reduce((a,x)=>a+num(x.amount),0),normalExpense=t.filter(x=>x.type==='expense'&&!x.loanId).reduce((a,x)=>a+num(x.amount),0),credit=t.filter(x=>x.type==='credit').reduce((a,x)=>a+num(x.amount),0),net=normalIncome-normalExpense-credit;if(m!==todayISO.slice(0,7))return {daily:0,remainingDays:0,net,historical:true};const [y,mo]=m.split('-').map(Number),days=new Date(y,mo,0).getDate(),remaining=Math.max(1,days-now.getDate()+1);return {daily:Math.max(0,net)/remaining,remainingDays:remaining,net,historical:false}}
-  function injectDaily(){if($('dailyBudgetCard'))return;const host=document.querySelector('#home .summary-grid, #home .cards.three');if(!host)return;const e=document.createElement('article');e.id='dailyBudgetCard';e.className='panel stat daily-budget-card';e.innerHTML='<small>Daily safe budget</small><strong id="dailyBudgetAmount">0 MMK</strong><span id="dailyBudgetMeta"></span>';host.appendChild(e)}
-  function renderDaily(){const s=read(),r=currentDailyBudget(s,month(s)),a=$('dailyBudgetAmount'),meta=$('dailyBudgetMeta');if(a)a.textContent=r.historical?'—':money(r.daily);if(meta)meta.textContent=r.historical?'Available for the current month only':`${r.remainingDays} day${r.remainingDays===1?'':'s'} remaining · Disposable net ${money(r.net)}`}
-  function drawBars(canvas,rows,colors){if(!canvas?.getContext)return;const w=Math.max(260,canvas.clientWidth||520),h=220,dpr=devicePixelRatio||1;canvas.width=w*dpr;canvas.height=h*dpr;canvas.style.height=`${h}px`;const c=canvas.getContext('2d');c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,w,h);const max=Math.max(1,...rows.flatMap(r=>r.values)),gap=12,g=Math.max(34,(w-gap*(rows.length+1))/Math.max(1,rows.length));rows.forEach((r,i)=>{const x=gap+i*(g+gap),bw=Math.max(8,(g-8)/r.values.length);r.values.forEach((v,j)=>{const bh=Math.max(2,v/max*145),y=172-bh;c.fillStyle=colors[j];if(c.roundRect){c.beginPath();c.roundRect(x+j*(bw+4),y,bw,bh,5);c.fill()}else c.fillRect(x+j*(bw+4),y,bw,bh)});c.fillStyle=getComputedStyle(document.body).getPropertyValue('--muted')||'#94a3b8';c.font='11px system-ui';c.textAlign='center';c.fillText(r.label,x+g/2,198)});c.strokeStyle=getComputedStyle(document.body).getPropertyValue('--line')||'#263449';c.beginPath();c.moveTo(0,173);c.lineTo(w,173);c.stroke()}
-  function ensureCharts(){const d=$('dashboard');if(!d||$('customCharts'))return;const p=document.createElement('div');p.id='customCharts';p.className='two-col chart-panels';p.innerHTML='<div class="panel chart-card"><div class="section-head"><div><small class="eyebrow">VISUAL ANALYTICS</small><h3>Budget utilisation</h3></div></div><canvas id="budgetChart" height="220" aria-label="Budget utilisation chart"></canvas><div class="chart-legend"><span>Budget</span><span>Spent</span></div></div><div class="panel chart-card"><div class="section-head"><div><small class="eyebrow">LIABILITY BI</small><h3>Loan vs payback trend</h3></div></div><canvas id="loanChart" height="220" aria-label="Loan received versus payback chart"></canvas><div id="loanChartLegend" class="chart-legend"></div></div>';d.appendChild(p)}
-  function renderCharts(){const s=read(),m=month(s),bs=(s.budgets||[]).filter(b=>monthOf(b.month)===m),spend=(name)=> (s.transactions||[]).filter(t=>monthOf(t.date)===m&&t.type==='expense'&&!t.loanId&&String(t.category)===String(name)).reduce((a,t)=>a+num(t.amount),0);drawBars($('budgetChart'),bs.slice(0,8).map(b=>({label:String(b.name||b.category).slice(0,9),values:[num(b.amount),spend(b.name||b.category)]})),['#4f8cff','#22d3ee']);const ms=[...new Set((s.transactions||[]).map(t=>monthOf(t.date)).filter(Boolean))].sort().slice(-6);drawBars($('loanChart'),ms.map(x=>({label:x.slice(5),values:[(s.transactions||[]).filter(t=>monthOf(t.date)===x&&t.type==='income'&&t.loanId).reduce((a,t)=>a+num(t.amount),0),(s.transactions||[]).filter(t=>monthOf(t.date)===x&&t.type==='expense'&&t.loanId).reduce((a,t)=>a+num(t.amount),0)]})),['#8b5cf6','#fb7185']);const l=$('loanChartLegend');if(l)l.innerHTML='<span><i class="legend-dot loan"></i>Received as liability income</span><span><i class="legend-dot payback"></i>Payback expense</span>'}
-  function ensureLoanReport(){if($('loanReport'))return;const d=$('dashboard');if(!d)return;const p=document.createElement('div');p.id='loanReport';p.className='panel loan-report';p.innerHTML='<div class="section-head"><div><small class="eyebrow">LIABILITY REPORT</small><h3>Loan position</h3></div></div><div id="loanReportStats" class="loan-report-stats"></div>';d.insertBefore(p,$('customCharts'))}
-  function renderLoan(){const s=read(),m=month(s),ts=s.transactions||[],received=ts.filter(t=>monthOf(t.date)===m&&t.type==='income'&&t.loanId).reduce((a,t)=>a+num(t.amount),0),paid=ts.filter(t=>monthOf(t.date)===m&&t.type==='expense'&&t.loanId).reduce((a,t)=>a+num(t.amount),0),out=(s.loans||[]).reduce((a,l)=>a+Math.max(0,num(l.remaining)),0),host=$('loanReportStats');if(host)host.innerHTML=`<div><small>Received this month</small><strong>${money(received)}</strong></div><div><small>Paid this month</small><strong>${money(paid)}</strong></div><div><small>Total outstanding</small><strong>${money(out)}</strong></div>`}
-  function ensureFab(){if($('mobileFab'))return;const f=document.createElement('div');f.id='mobileFab';f.className='mobile-fab';f.innerHTML='<button type="button" class="fab-main" aria-label="Open quick actions" aria-expanded="false">＋</button><div class="fab-actions" aria-hidden="true"><button type="button" data-type="expense" aria-label="Add expense">− Expense</button><button type="button" data-type="income" aria-label="Add income">＋ Income</button><button type="button" data-type="loan" aria-label="Record loan">↗ Loan</button></div>';document.body.appendChild(f);const main=f.querySelector('.fab-main');main.onclick=()=>{const open=f.classList.toggle('open');main.setAttribute('aria-expanded',String(open));f.querySelector('.fab-actions').setAttribute('aria-hidden',String(!open))};f.onclick=e=>{const b=e.target.closest('[data-type]');if(!b)return;document.querySelector(`[data-type="${b.dataset.type}"]`)?.click();f.classList.remove('open');main.setAttribute('aria-expanded','false')}}
-  function blockInvalidCategory(){document.addEventListener('submit',e=>{if(e.target.id!=='transactionForm')return;const type=localStorage.getItem(KEY)?read().currentType:'expense';const category=$('category');if(type!=='loan'&&type!=='payback'&&(!category||!category.value||category.value==='General'&&!read().categories?.some(c=>c.name==='General'&&c.type===type))){e.preventDefault();e.stopImmediatePropagation();toast('Create and select a valid category first.');category?.focus()}},true)}
-  function refresh(){injectMonthPicker();injectDaily();ensureCharts();ensureLoanReport();ensureFab();syncMonthPickers();renderDaily();renderCharts();renderLoan()}
-  function run(){refresh();window.addEventListener('resize',renderCharts,{passive:true});window.addEventListener('storage',refresh);window.addEventListener('moneyflow:monthchange',refresh);['click','submit','change'].forEach(type=>document.addEventListener(type,()=>requestAnimationFrame(refresh),{passive:true}));blockInvalidCategory();}
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',run,{once:true});else run();
+
+  const KEY = 'moneyflow-v3';
+  const $ = (id) => document.getElementById(id);
+  const today = new Date();
+  const todayISO = today.toISOString().slice(0, 10);
+  const currentMonth = todayISO.slice(0, 7);
+
+  const read = () => {
+    try {
+      return JSON.parse(localStorage.getItem(KEY) || '{}');
+    } catch (_) {
+      return {};
+    }
+  };
+
+  const save = (state) => {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(state));
+    } catch (_) {}
+  };
+
+  const num = (value) => Number(String(value ?? '').replace(/,/g, '')) || 0;
+  const money = (value) => `${Math.round(num(value)).toLocaleString()} MMK`;
+  const monthOf = (value) => String(value || '').slice(0, 7);
+  const monthLabel = (value) => {
+    const [year, month] = String(value).split('-').map(Number);
+    return year && month
+      ? new Date(year, month - 1, 1).toLocaleString('en', { month: 'long', year: 'numeric' })
+      : value;
+  };
+  const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+
+  function stateWithDefaults() {
+    const raw = read();
+    return {
+      ...raw,
+      transactions: Array.isArray(raw.transactions) ? raw.transactions : [],
+      budgets: Array.isArray(raw.budgets) ? raw.budgets : [],
+      loans: Array.isArray(raw.loans) ? raw.loans : [],
+      categories: Array.isArray(raw.categories) ? raw.categories : [],
+      reportMonth: /^\d{4}-\d{2}$/.test(String(raw.reportMonth || '')) ? raw.reportMonth : currentMonth,
+      settings: raw.settings || {}
+    };
+  }
+
+  // Keep a useful selectable range even before the user has saved data in a month.
+  function monthRange() {
+    const result = [];
+    const start = new Date(today.getFullYear(), today.getMonth() - 24, 1);
+    const end = new Date(today.getFullYear(), today.getMonth() + 24, 1);
+    for (const cursor = new Date(start); cursor <= end; cursor.setMonth(cursor.getMonth() + 1)) {
+      result.push(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`);
+    }
+    return result;
+  }
+
+  function availableMonths(state) {
+    return Array.from(new Set([
+      ...monthRange(),
+      state.reportMonth,
+      ...state.transactions.map((item) => monthOf(item.date)),
+      ...state.budgets.map((item) => monthOf(item.month))
+    ].filter((value) => /^\d{4}-\d{2}$/.test(value)))).sort();
+  }
+
+  function setReportMonth(value) {
+    if (!/^\d{4}-\d{2}$/.test(String(value))) return;
+    const state = stateWithDefaults();
+    state.reportMonth = value;
+    save(state);
+
+    const primary = $('monthSelect');
+    if (primary && primary.value !== value) primary.value = value;
+
+    const home = $('homeMonthSelect');
+    if (home && home.value !== value) home.value = value;
+
+    // app.js listens for the existing monthSelect change event.
+    if (primary) primary.dispatchEvent(new Event('change', { bubbles: true }));
+    window.dispatchEvent(new CustomEvent('moneyflow:monthchange', { detail: { month: value } }));
+  }
+
+  function ensureHomeMonthSelector() {
+    const badge = document.querySelector('#home .month-badge');
+    if (!badge) return;
+
+    let select = $('homeMonthSelect');
+    if (!select) {
+      badge.innerHTML = '<label class="month-picker"><span>Reporting month</span><select id="homeMonthSelect" aria-label="Select home reporting month"></select></label>';
+      select = $('homeMonthSelect');
+      select.addEventListener('change', (event) => setReportMonth(event.target.value));
+    }
+  }
+
+  function renderMonthSelectors() {
+    const state = stateWithDefaults();
+    const options = availableMonths(state).map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(monthLabel(value))}</option>`).join('');
+
+    ['monthSelect', 'homeMonthSelect'].forEach((id) => {
+      const select = $(id);
+      if (!select) return;
+      select.innerHTML = options;
+      select.value = state.reportMonth;
+    });
+  }
+
+  function currentMonthBudget(state) {
+    const selected = state.reportMonth;
+    const transactions = state.transactions.filter((item) => monthOf(item.date) === selected);
+
+    // Loan receipts are liabilities, not disposable income.
+    const income = transactions
+      .filter((item) => item.type === 'income' && !item.loanId)
+      .reduce((sum, item) => sum + num(item.amount), 0);
+    const expenses = transactions
+      .filter((item) => item.type === 'expense' && !item.loanId)
+      .reduce((sum, item) => sum + num(item.amount), 0);
+    const credit = transactions
+      .filter((item) => item.type === 'credit')
+      .reduce((sum, item) => sum + num(item.amount), 0);
+    const net = income - expenses - credit;
+
+    if (selected !== currentMonth) {
+      return { daily: 0, remainingDays: 0, net, historical: true };
+    }
+
+    const [year, month] = selected.split('-').map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const remainingDays = Math.max(1, daysInMonth - today.getDate() + 1);
+
+    return {
+      daily: Math.max(0, net) / remainingDays,
+      remainingDays,
+      net,
+      historical: false
+    };
+  }
+
+  function ensureDailyBudgetCard() {
+    if ($('dailyBudgetCard')) return;
+
+    const host = document.querySelector('#home .cards') || document.querySelector('#home .summary-grid');
+    if (!host) return;
+
+    const card = document.createElement('article');
+    card.id = 'dailyBudgetCard';
+    card.className = 'panel stat daily-budget-card';
+    card.innerHTML = '<small>Daily safe budget</small><strong id="dailyBudgetAmount">—</strong><span id="dailyBudgetMeta">Current month only</span>';
+    host.appendChild(card);
+  }
+
+  function renderDailyBudget() {
+    const state = stateWithDefaults();
+    const result = currentMonthBudget(state);
+    const amount = $('dailyBudgetAmount');
+    const meta = $('dailyBudgetMeta');
+
+    if (amount) amount.textContent = result.historical ? '—' : money(result.daily);
+    if (meta) {
+      meta.textContent = result.historical
+        ? 'Available for the current month only'
+        : `${result.remainingDays} day${result.remainingDays === 1 ? '' : 's'} remaining · Net ${money(result.net)}`;
+    }
+  }
+
+  function refresh() {
+    ensureHomeMonthSelector();
+    ensureDailyBudgetCard();
+    renderMonthSelectors();
+    renderDailyBudget();
+  }
+
+  function run() {
+    refresh();
+
+    // Refresh only when data or the selected month changes; no polling loop.
+    window.addEventListener('storage', refresh);
+    window.addEventListener('moneyflow:monthchange', refresh);
+    document.addEventListener('click', (event) => {
+      if (event.target.closest('[data-page], [data-type], #addBudgetBtn, [data-delete-budget], [data-delete-transaction], #clearTransactionsBtn')) {
+        requestAnimationFrame(refresh);
+      }
+    });
+    document.addEventListener('submit', () => requestAnimationFrame(refresh));
+    document.addEventListener('change', (event) => {
+      if (event.target.id === 'monthSelect' || event.target.id === 'homeMonthSelect') {
+        setReportMonth(event.target.value);
+      } else if (event.target.id === 'syncUrl' || event.target.id === 'budgetMonth') {
+        requestAnimationFrame(refresh);
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run, { once: true });
+  } else {
+    run();
+  }
 })();
