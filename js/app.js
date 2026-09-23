@@ -1,12 +1,13 @@
 (() => {
   'use strict';
 
-  const STORAGE_KEY = 'moneyflow-v3';
-  const today = new Date();
-  const todayISO = today.toISOString().slice(0, 10);
-  const currentMonth = todayISO.slice(0, 7);
+  const KEY = 'moneyflow-v3';
+  const $ = (id) => document.getElementById(id);
 
-  const defaultCategories = [
+  const today = new Date().toISOString().slice(0, 10);
+  const currentMonth = today.slice(0, 7);
+
+  const defaults = [
     ['Food & Drinks', 'expense'],
     ['Transportation', 'expense'],
     ['Family', 'expense'],
@@ -16,449 +17,840 @@
     ['Health', 'expense'],
     ['Education', 'expense'],
     ['Salary', 'income'],
-    ['Bonus', 'income']
+    ['Bonus', 'income'],
+    ['Loan', 'income']
   ];
 
-  const defaultState = {
+  const fallback = {
     transactions: [],
-    categories: defaultCategories.map(([name, type]) => ({ name, type })),
+    categories: defaults.map(([name, type]) => ({ name, type })),
     budgets: [],
     goals: [],
     loans: [],
     reportMonth: currentMonth,
     settings: {
-      theme: 'light',
+      theme: 'dark',
       syncUrl: '',
       syncRevision: '',
       lastSynced: ''
     }
   };
 
-  const $ = (id) => document.getElementById(id);
-
-  function money(value) {
-    return `${Math.round(Number(value) || 0).toLocaleString()} MMK`;
-  }
-
-  function number(value) {
-    const raw = value == null ? '' : String(value);
-    return Number(raw.replace(/,/g, '')) || 0;
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;'
-    }[ch]));
-  }
+  let syncing = false;
 
   function uid(prefix = 'id') {
     return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
-  function toast(message) {
-    const el = $('toast');
-    if (!el) return;
-    el.textContent = message;
-    el.classList.add('on');
-    clearTimeout(el._timer);
-    el._timer = setTimeout(() => el.classList.remove('on'), 2200);
+  function num(value) {
+    const n = Number(String(value == null ? '' : value).replace(/,/g, ''));
+    return Number.isFinite(n) ? n : 0;
   }
 
-  function loadState() {
+  function money(value) {
+    return `${Math.round(num(value)).toLocaleString()} MMK`;
+  }
+
+  function monthOf(value) {
+    return String(value || '').slice(0, 7);
+  }
+
+  function monthLabel(monthValue) {
+    const m = String(monthValue || currentMonth);
+    if (!/^\d{4}-\d{2}$/.test(m)) return m;
+    const [year, month] = m.split('-').map(Number);
+    return new Date(year, month - 1, 1).toLocaleString('en-US', {
+      month: 'long',
+      year: 'numeric'
+    });
+  }
+
+  function esc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[c]));
+  }
+
+  function load() {
     try {
-      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null') || {};
-      return {
-        ...defaultState,
+      const raw = JSON.parse(localStorage.getItem(KEY) || '{}');
+      const merged = {
+        ...fallback,
         ...raw,
-        settings: { ...defaultState.settings, ...(raw.settings || {}) },
-        categories: Array.isArray(raw.categories) && raw.categories.length ? raw.categories : defaultState.categories.slice(),
-        transactions: Array.isArray(raw.transactions) ? raw.transactions : [],
-        budgets: Array.isArray(raw.budgets) ? raw.budgets : [],
-        goals: Array.isArray(raw.goals) ? raw.goals : [],
-        loans: Array.isArray(raw.loans) ? raw.loans : []
+        settings: { ...fallback.settings, ...(raw.settings || {}) }
       };
+
+      merged.transactions = Array.isArray(raw.transactions) ? raw.transactions : [];
+      merged.categories = Array.isArray(raw.categories) && raw.categories.length ? raw.categories : fallback.categories.slice();
+      merged.budgets = Array.isArray(raw.budgets) ? raw.budgets : [];
+      merged.goals = Array.isArray(raw.goals) ? raw.goals : [];
+      merged.loans = Array.isArray(raw.loans) ? raw.loans : [];
+      merged.reportMonth = /^\d{4}-\d{2}$/.test(String(raw.reportMonth || '')) ? raw.reportMonth : currentMonth;
+
+      return merged;
     } catch (_) {
-      return JSON.parse(JSON.stringify(defaultState));
+      return JSON.parse(JSON.stringify(fallback));
     }
   }
 
-  let state = loadState();
+  let state = load();
 
-  function saveState() {
+  function save() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(KEY, JSON.stringify(state));
     } catch (_) {}
   }
 
-  function monthName(key) {
-    if (!key) return 'This month';
-    const d = new Date(`${key}-01T00:00:00`);
-    return d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+  function normalizeState() {
+    if (!state.settings) state.settings = {};
+    state.settings = { ...fallback.settings, ...state.settings };
+
+    if (!Array.isArray(state.categories) || !state.categories.length) {
+      state.categories = fallback.categories.slice();
+    }
+
+    ['transactions', 'budgets', 'goals', 'loans'].forEach((key) => {
+      if (!Array.isArray(state[key])) state[key] = [];
+    });
+
+    state.reportMonth = /^\d{4}-\d{2}$/.test(String(state.reportMonth || '')) ? state.reportMonth : currentMonth;
+
+    state.transactions = state.transactions.map((tx) => {
+      const item = { ...tx };
+      const category = String(item.category || '').toLowerCase();
+
+      if (item.type === 'loan' || category === 'loan' || category === 'loan received') {
+        item.type = 'income';
+        item.category = 'Loan';
+        item.loanId = item.loanId || uid('loan');
+      }
+
+      if (category === 'loan repayment' || category === 'loan payback' || category === 'loan repayment payback') {
+        item.type = 'expense';
+        item.category = 'Loan Repayment';
+      }
+
+      return item;
+    });
+
+    rebuildMissingLoans();
+    save();
   }
 
-  function monthLabelFromISO(dateIso) {
-    return dateIso ? String(dateIso).slice(0, 7) : currentMonth;
+  function cleanLoanName(tx) {
+    return String(tx.note || tx.category || 'Loan').trim() || 'Loan';
   }
 
-  function getSelectedMonth() {
-    return state.reportMonth || currentMonth;
+  function rebuildMissingLoans() {
+    state.transactions.filter((tx) => tx.type === 'income' && tx.loanId).forEach((tx) => {
+      if (!state.loans.some((loan) => String(loan.id) === String(tx.loanId))) {
+        state.loans.push({
+          id: tx.loanId,
+          name: cleanLoanName(tx),
+          principal: num(tx.amount),
+          remaining: num(tx.amount),
+          date: tx.date || today,
+          note: tx.note || '',
+          createdAt: tx.createdAt || new Date().toISOString()
+        });
+      }
+    });
   }
 
-  function itemsForMonth(month = getSelectedMonth()) {
-    return state.transactions.filter(tx => String(tx.date || '').slice(0, 7) === month);
-  }
-
-  function getTransactionTotals(list) {
-    return list.reduce((acc, tx) => {
-      const amount = number(tx.amount);
-      if (tx.type === 'income') acc.income += amount;
-      else if (tx.type === 'expense') acc.expense += amount;
-      else if (tx.type === 'credit') acc.credit += amount;
-      return acc;
+  function totals(list) {
+    return list.reduce((result, tx) => {
+      const amount = num(tx.amount);
+      if (tx.type === 'income') result.income += amount;
+      else if (tx.type === 'expense') result.expense += amount;
+      else if (tx.type === 'credit') result.credit += amount;
+      return result;
     }, { income: 0, expense: 0, credit: 0 });
   }
 
-  function getCategorySpendingForMonth(month, categoryName) {
-    return state.transactions
-      .filter(tx => String(tx.date || '').slice(0, 7) === month && tx.type === 'expense' && String(tx.category || 'General') === String(categoryName))
-      .reduce((sum, tx) => sum + number(tx.amount), 0);
+  function loanReceived(list) {
+    return list.filter((tx) => tx.type === 'income' && tx.loanId).reduce((sum, tx) => sum + num(tx.amount), 0);
   }
 
-  function getBudgetRowsForMonth(month = getSelectedMonth()) {
-    const monthBudgets = state.budgets.filter(b => String(b.month || '').slice(0, 7) === month || String(b.month) === month);
-    const rows = monthBudgets.map((budget) => {
-      const spent = getCategorySpendingForMonth(month, budget.name);
-      const remaining = number(budget.amount) - spent;
-      const usedPct = number(budget.amount) ? (spent / number(budget.amount)) * 100 : 0;
-      const threshold = Number(budget.threshold || 80);
-      const due = budget.dueDate || '';
-      const isOverdue = Boolean(due && due < todayISO && remaining > 0);
-      const isNearLimit = usedPct >= threshold;
-      const isExceeded = spent > number(budget.amount);
+  function loanPaybacks(list) {
+    return list.filter((tx) => tx.type === 'expense' && tx.loanId).reduce((sum, tx) => sum + num(tx.amount), 0);
+  }
 
-      return {
-        ...budget,
-        spent,
-        remaining,
-        usedPct,
-        threshold,
-        isNearLimit,
-        isExceeded,
-        isOverdue
-      };
+  function outstandingLoans() {
+    return state.loans.reduce((sum, loan) => sum + Math.max(0, num(loan.remaining)), 0);
+  }
+
+  function categoryRows(list) {
+    const grouped = {};
+    list.filter((tx) => tx.type === 'expense' && !tx.loanId).forEach((tx) => {
+      const key = tx.category || 'General';
+      grouped[key] = (grouped[key] || 0) + num(tx.amount);
     });
-    return rows.sort((a, b) => b.spent - a.spent);
+    return Object.entries(grouped)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, amount]) => ({ name, amount }));
   }
 
-  function budgetSummaryForMonth(month = getSelectedMonth()) {
-    const rows = getBudgetRowsForMonth(month);
+  function monthlyRows() {
+    const grouped = {};
+    state.transactions.forEach((tx) => {
+      const key = monthOf(tx.date);
+      if (!key) return;
+      if (!grouped[key]) grouped[key] = { month: key, income: 0, expense: 0, credit: 0, loan: 0, payback: 0 };
+      const amount = num(tx.amount);
 
-    const totalBudget = rows.reduce((sum, row) => sum + number(row.amount), 0);
-    const totalSpent = rows.reduce((sum, row) => sum + row.spent, 0);
-    const totalRemaining = totalBudget - totalSpent;
-    const usedPct = totalBudget ? (totalSpent / totalBudget) * 100 : 0;
-    return { rows, totalBudget, totalSpent, totalRemaining, usedPct };
-  }
-
-  function showPage(id) {
-    document.querySelectorAll('.page').forEach((page) => {
-      page.classList.toggle('active', page.id === id);
-    });
-    document.querySelectorAll('.nav-btn').forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.page === id);
-    });
-  }
-
-  function populateCategorySelect() {
-    const categorySelect = $('category');
-    if (categorySelect) {
-      const type = state.currentType || 'expense';
-      const filtered = state.categories.filter(cat => cat.type === type || (type === 'credit' && cat.type === 'expense'));
-      categorySelect.innerHTML = filtered.length
-        ? filtered.map(cat => `<option value="${escapeHtml(cat.name)}">${escapeHtml(cat.name)}</option>`).join('')
-        : '<option value="General">General</option>';
-    }
-
-    const budgetCategory = $('budgetCategory');
-    if (budgetCategory) {
-      const list = state.categories.filter(cat => cat.type === 'expense');
-      budgetCategory.innerHTML = list.length
-        ? list.map(cat => `<option value="${escapeHtml(cat.name)}">${escapeHtml(cat.name)}</option>`).join('')
-        : '<option value="General">General</option>';
-    }
-  }
-
-  function updateMonthOptions() {
-    const monthSelect = $('monthSelect');
-    if (monthSelect) {
-      const values = Array.from(new Set(
-        state.transactions.map(tx => String(tx.date || '').slice(0, 7)).filter(Boolean)
-      )).concat(state.budgets.map(b => String(b.month || '').slice(0, 7)).filter(Boolean));
-      const unique = Array.from(new Set(values));
-      unique.push(getSelectedMonth());
-      const sorted = Array.from(new Set(unique)).sort();
-      monthSelect.innerHTML = sorted.map(month => `<option value="${month}">${monthName(month)}</option>`).join('');
-      monthSelect.value = getSelectedMonth();
-    }
-  }
-
-  function renderHomeSummary() {
-    const month = getSelectedMonth();
-    const list = itemsForMonth(month);
-    const totals = getTransactionTotals(list);
-    const net = totals.income - totals.expense - totals.credit;
-
-    const homeIncome = $('homeIncome');
-    const homeExpense = $('homeExpense');
-    const homeNet = $('homeNet');
-    const homeMonth = $('homeMonth');
-
-    if (homeIncome) homeIncome.textContent = money(totals.income);
-    if (homeExpense) homeExpense.textContent = money(totals.expense);
-    if (homeNet) homeNet.textContent = money(net);
-    if (homeMonth) homeMonth.textContent = month;
-
-    const recent = $('recentTransactions');
-    if (recent) {
-      recent.innerHTML = state.transactions.slice().sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 5).map((tx) => {
-        const type = String(tx.type || 'expense').toLowerCase();
-        const amount = money(number(tx.amount));
-        return `
-          <div class="list-item">
-            <div class="meta">
-              <span>${escapeHtml(tx.category || 'General')}</span>
-              <strong>${escapeHtml(tx.type.toUpperCase())}</strong>
-            </div>
-            <span class="amount-pill ${type}">${amount}</span>
-          </div>
-        `;
-      }).join('') || '<div class=\"list-item\"><div class=\"meta\"><span>No transactions yet</span><strong>Start adding entries</strong></div></div>';
-    }
-  }
-
-  function renderBudgetDashboard() {
-    const month = getSelectedMonth();
-    const summary = budgetSummaryForMonth(month);
-    const rows = summary.rows;
-
-    const totalBudgetEl = $('budgetTotal');
-    const totalSpentEl = $('budgetSpent');
-    const remainingEl = $('budgetRemaining');
-    const usedPctEl = $('budgetUsedPct');
-    const alertsEl = $('budgetAlerts');
-    const breakdownEl = $('budgetBreakdown');
-    const focusEl = $('focusBI');
-
-    if (totalBudgetEl) totalBudgetEl.textContent = money(summary.totalBudget);
-    if (totalSpentEl) totalSpentEl.textContent = money(summary.totalSpent);
-    if (remainingEl) remainingEl.textContent = money(summary.totalRemaining);
-    if (usedPctEl) usedPctEl.textContent = `${Math.round(summary.usedPct)}%`;
-
-    if (alertsEl) {
-      if (!rows.length) {
-        alertsEl.innerHTML = '<div class="alert success"><strong>No budget set for this month.</strong><span>Use the budget form to add one.</span></div>';
-        return;
+      if (tx.type === 'income') {
+        grouped[key].income += amount;
+        if (tx.loanId) grouped[key].loan += amount;
       }
 
-      alertsEl.innerHTML = rows.map((budget) => {
-        let kind = 'success';
-        let text = 'On track';
+      if (tx.type === 'expense') {
+        grouped[key].expense += amount;
+        if (tx.loanId) grouped[key].payback += amount;
+      }
 
-        if (budget.isExceeded) {
-          kind = 'danger';
-          text = `Exceeded by ${money(budget.spent - number(budget.amount))}`;
-        } else if (budget.isNearLimit) {
-          kind = 'warning';
-          text = `Near limit: ${money(budget.spent)} / ${money(budget.amount)}`;
-        } else if (budget.isOverdue) {
-          kind = 'warning';
-          text = `Overdue: remaining ${money(budget.remaining)}`;
-        } else if (budget.remaining < 0) {
-          kind = 'danger';
-          text = `Over budget by ${money(Math.abs(budget.remaining))}`;
-        }
+      if (tx.type === 'credit') grouped[key].credit += amount;
+    });
 
-        return `
-          <div class="alert ${kind}">
-            <div>
-              <strong>${escapeHtml(budget.name)}</strong>
-              <small>${monthName(month)} • ${budget.threshold}% alert</small>
-            </div>
-            <span>${text}</span>
-          </div>
-        `;
-      }).join('');
+    return Object.values(grouped).sort((a, b) => a.month.localeCompare(b.month)).slice(-6);
+  }
+
+  function currentBudgetData() {
+    const monthValue = state.reportMonth || currentMonth;
+    const txs = state.transactions.filter((tx) => monthOf(tx.date) === monthValue);
+
+    const income = txs.filter((tx) => tx.type === 'income' && !tx.loanId).reduce((sum, tx) => sum + num(tx.amount), 0);
+    const expense = txs.filter((tx) => tx.type === 'expense' && !tx.loanId).reduce((sum, tx) => sum + num(tx.amount), 0);
+    const credit = txs.filter((tx) => tx.type === 'credit').reduce((sum, tx) => sum + num(tx.amount), 0);
+
+    const net = income - expense - credit;
+
+    if (monthValue !== currentMonth) {
+      return { net, daily: 0, remainingDays: 0, historical: true };
     }
 
-    if (breakdownEl) {
-      breakdownEl.innerHTML = rows.length
-        ? rows.map((budget) => {
-            const percent = Math.min(100, Math.round(budget.usedPct));
-            const barClass = percent >= 90 ? 'danger' : percent >= budget.threshold ? 'warning' : '';
-            return `
-              <div class="budget-item">
-                <div class="budget-item-head">
-                  <div>
-                    <strong>${escapeHtml(budget.name)}</strong>
-                    <span>${monthName(month)}</span>
-                  </div>
-                  <span>${money(budget.spent)} / ${money(budget.amount)}</span>
-                </div>
-                <div class="progress">
-                  <div class="progress-bar ${barClass}" style="width:${percent}%"></div>
-                </div>
-                <div class="meta-row">
-                  <span>Used ${Math.round(budget.usedPct)}%</span>
-                  <span>${money(budget.remaining)} left</span>
-                </div>
-              </div>
-            `;
-          }).join('')
-        : '<div class=\"alert success\"><strong>No budget data</strong><span>Add a category budget to begin tracking.</span></div>';
+    const [year, month] = monthValue.split('-').map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const day = new Date().getDate();
+    const remainingDays = Math.max(1, daysInMonth - day + 1);
+
+    return {
+      net,
+      daily: Math.max(0, net) / remainingDays,
+      remainingDays,
+      historical: false
+    };
+  }
+
+  function showPage(pageId) {
+    document.querySelectorAll('.page').forEach((page) => {
+      page.classList.toggle('active', page.id === pageId);
+    });
+
+    document.querySelectorAll('[data-page]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.page === pageId);
+    });
+  }
+
+  function populateCategories() {
+    const select = $('category');
+    if (!select) return;
+
+    const type = state.currentType || 'expense';
+    const list = state.categories.filter((category) => category.type === type);
+    select.innerHTML = list.length
+      ? list.map((category) => `<option value="${esc(category.name)}">${esc(category.name)}</option>`).join('')
+      : '<option value="General">General</option>';
+
+    if (state.currentType === 'loan') {
+      select.innerHTML = '<option value="Loan">Loan</option>';
     }
 
-    if (focusEl) {
-      const monthList = Array.from(new Set(
-        state.transactions.map(tx => String(tx.date || '').slice(0, 7)).filter(Boolean)
-      )).concat(state.budgets.map(b => String(b.month || '').slice(0, 7)).filter(Boolean));
-      const uniqueMonths = Array.from(new Set(monthList)).sort();
-
-      focusEl.innerHTML = uniqueMonths.length
-        ? uniqueMonths.slice(-6).map((m) => {
-            const totalIncome = state.transactions
-              .filter(tx => String(tx.date || '').slice(0, 7) === m && tx.type === 'income')
-              .reduce((sum, tx) => sum + number(tx.amount), 0);
-
-            const totalExpense = state.transactions
-              .filter(tx => String(tx.date || '').slice(0, 7) === m && tx.type === 'expense')
-              .reduce((sum, tx) => sum + number(tx.amount), 0);
-
-            const totalBudget = state.budgets
-              .filter(b => String(b.month || '').slice(0, 7) === m)
-              .reduce((sum, b) => sum + number(b.amount), 0);
-
-            return `
-              <div class="focus-item">
-                <span>${m}</span>
-                <strong>${money(totalExpense)}</strong>
-                <small>Budget ${money(totalBudget)} · Income ${money(totalIncome)}</small>
-              </div>
-            `;
-          }).join('')
-        : '<div class=\"alert success\"><strong>No monthly data</strong><span>Transactions and budgets will appear here.</span></div>';
+    if (state.currentType === 'payback') {
+      select.innerHTML = '<option value="Loan Repayment">Loan Repayment</option>';
     }
   }
 
-  function renderTransactionsTable() {
-    const rows = state.transactions.slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  function renderLoanSelect() {
+    const select = $('loanSelect');
+    if (!select) return;
 
-    const tableBody = $('transactionRows');
-    if (!tableBody) return;
+    const activeLoans = state.loans.filter((loan) => num(loan.remaining) > 0);
+    select.innerHTML = activeLoans.length
+      ? activeLoans.map((loan) => `<option value="${esc(loan.id)}">${esc(loan.name || 'Loan')} (${money(loan.remaining)})</option>`).join('')
+      : '<option value="">No active loan</option>';
 
-    tableBody.innerHTML = rows.length
-      ? rows.map((tx) => `
-          <tr>
-            <td>${escapeHtml(tx.date || '')}</td>
-            <td>${escapeHtml(String(tx.type || 'expense').toUpperCase())}</td>
-            <td>${escapeHtml(tx.category || 'General')}</td>
-            <td>${escapeHtml(tx.note || '-')}</td>
-            <td>${escapeHtml(money(tx.amount || 0))}</td>
-          </tr>
-        `).join('')
-      : '<tr><td colspan="5">No transactions yet</td></tr>';
-  }
-
-  function renderTheme() {
-    const isDark = state.settings.theme === 'dark';
-    document.body.classList.toggle('dark', isDark);
-    const toggle = $('switchTheme');
-    if (toggle) {
-      toggle.classList.toggle('on', isDark);
-    }
-  }
-
-  function renderAll() {
-    populateCategorySelect();
-    updateMonthOptions();
-    renderHomeSummary();
-    renderBudgetDashboard();
-    renderTransactionsTable();
-    renderTheme();
+    select.disabled = !activeLoans.length;
   }
 
   function setType(type) {
-    state.currentType = type;
+    state.currentType = type || 'expense';
 
-    const formTitle = $('formTitle');
-    if (formTitle) formTitle.textContent = {
+    const titles = {
       expense: 'Add Expense',
       income: 'Add Income',
-      credit: 'Credit Payment'
-    }[type] || 'Add Entry';
+      loan: 'Add Loan',
+      payback: 'Add Loan Payback',
+      credit: 'Add Credit Payment'
+    };
 
-    const categorySelect = $('category');
-    if (categorySelect) {
-      const typeList = state.categories.filter(cat => cat.type === type || (type === 'credit' && cat.type === 'expense'));
-      categorySelect.innerHTML = typeList.length
-        ? typeList.map(cat => `<option value="${escapeHtml(cat.name)}">${escapeHtml(cat.name)}</option>`).join('')
-        : '<option value="General">General</option>';
+    if ($('formTitle')) $('formTitle').textContent = titles[type] || 'Add Entry';
+    if ($('amount')) $('amount').value = '';
+    if ($('note')) $('note').value = '';
+
+    if ($('loanSelect')) {
+      $('loanSelect').disabled = type !== 'payback';
+      $('loanSelect').closest('.field')?.classList.toggle('hidden', type !== 'payback');
     }
 
     document.querySelectorAll('.tab').forEach((button) => {
-      button.classList.toggle('active', button.dataset.type === type);
+      button.classList.toggle('active', button.dataset.type === type || button.dataset.add === type);
+    });
+
+    populateCategories();
+    renderLoanSelect();
+  }
+
+  function updateMonthOptions() {
+    const select = $('month');
+    if (!select) return;
+
+    const values = Array.from(new Set(state.transactions.map((tx) => monthOf(tx.date)).filter(Boolean)));
+    if (!values.includes(state.reportMonth)) values.push(state.reportMonth);
+    select.innerHTML = values
+      .sort()
+      .map((monthValue) => `<option value="${monthValue}">${monthLabel(monthValue)}</option>`)
+      .join('');
+
+    select.value = state.reportMonth;
+  }
+
+  function renderHome() {
+    const monthList = state.transactions.filter((tx) => monthOf(tx.date) === state.reportMonth);
+    const totalsNow = totals(monthList);
+    const net = totalsNow.income - totalsNow.expense - totalsNow.credit;
+
+    const incomeEl = $('income');
+    const expenseEl = $('expense');
+    const creditEl = $('credit');
+    const remainingEl = $('remaining');
+
+    if (incomeEl) incomeEl.textContent = money(totalsNow.income);
+    if (expenseEl) expenseEl.textContent = money(totalsNow.expense);
+    if (creditEl) creditEl.textContent = money(totalsNow.credit);
+    if (remainingEl) remainingEl.textContent = money(net);
+
+    const loanEl = $('loan');
+    if (loanEl) loanEl.textContent = money(loanPaybacks(monthList));
+
+    const loanSummaryEl = $('loanSummary');
+    if (loanSummaryEl) loanSummaryEl.textContent = money(outstandingLoans());
+
+    const txCountEl = $('txCount');
+    if (txCountEl) txCountEl.textContent = `Activity (${monthList.length})`;
+
+    const recent = $('recent');
+    if (recent) {
+      recent.innerHTML = monthList
+        .slice()
+        .reverse()
+        .slice(0, 8)
+        .map((tx) => `
+          <div class="row">
+            <span>${esc(tx.type.toUpperCase())} ${esc(tx.category || 'General')}</span>
+            <b>${money(tx.amount)}</b>
+          </div>
+        `).join('') || '<div class="empty">No recent items yet.</div>';
+    }
+
+    const breakdown = $('breakdown');
+    if (breakdown) {
+      breakdown.innerHTML = categoryRows(monthList).slice(0, 5).map((row) => `
+        <div class="row">
+          <span>${esc(row.name)}</span>
+          <b>${money(row.amount)}</b>
+        </div>
+      `).join('') || '<div class="empty">No spend categories yet.</div>';
+    }
+  }
+
+  function renderBudgetAlerts() {
+    const host = $('budgetAlerts');
+    if (!host) return;
+
+    const monthBudgets = (state.budgets || []).filter((budget) => monthOf(budget.month) === state.reportMonth);
+    if (!monthBudgets.length) {
+      host.innerHTML = '<div class="alert success"><strong>No active budgets</strong><span>Set a category budget for this month.</span></div>';
+      return;
+    }
+
+    const rows = monthBudgets.map((budget) => {
+      const spent = state.transactions
+        .filter((tx) => monthOf(tx.date) === state.reportMonth && tx.type === 'expense' && !tx.loanId && String(tx.category) === String(budget.name))
+        .reduce((sum, tx) => sum + num(tx.amount), 0);
+
+      const max = num(budget.amount);
+      const pct = max ? (spent / max) * 100 : 0;
+
+      let level = 'success';
+      if (pct >= 80 && pct < 100) level = 'warning';
+      if (pct >= 100) level = 'danger';
+
+      return { budget, spent, pct, level };
+    });
+
+    host.innerHTML = rows.map(({ budget, spent, pct, level }) => `
+      <div class="alert ${level}">
+        <strong>${esc(budget.name || 'Budget')}</strong>
+        <span>${money(spent)} / ${money(budget.amount)} · ${Math.round(pct)}%</span>
+      </div>
+    `).join('');
+  }
+
+  function renderReports() {
+    const monthList = state.transactions.filter((tx) => monthOf(tx.date) === state.reportMonth);
+    const totalsNow = totals(monthList);
+    const categories = categoryRows(monthList);
+    const overallNet = totalsNow.income - totalsNow.expense - totalsNow.credit;
+
+    const cashflowEl = $('cashflow');
+    const spentEl = $('spent');
+    const remainingEl = $('remaining');
+    const topSpendEl = $('topSpend');
+    const topAmtEl = $('topAmt');
+    const rhythmEl = $('rhythm');
+
+    if (cashflowEl) cashflowEl.textContent = money(overallNet);
+    if (spentEl) spentEl.textContent = money(totalsNow.expense);
+    if (remainingEl) remainingEl.textContent = money(overallNet);
+    if (topSpendEl) topSpendEl.textContent = categories[0] ? categories[0].name : '—';
+    if (topAmtEl) topAmtEl.textContent = categories[0] ? money(categories[0].amount) : '0 MMK';
+    if (rhythmEl) rhythmEl.textContent = String(monthList.length);
+
+    const daily = currentBudgetData();
+    const dailyBudgetEl = $('dailyBudgetAmount');
+    if (dailyBudgetEl) dailyBudgetEl.textContent = daily.historical ? '—' : money(daily.daily);
+
+    const dailyMetaEl = $('dailyBudgetMeta');
+    if (dailyMetaEl) {
+      dailyMetaEl.textContent = daily.historical
+        ? 'Current month only'
+        : `${daily.remainingDays} day${daily.remainingDays === 1 ? '' : 's'} left · net ${money(daily.net)}`;
+    }
+
+    const reportList = $('reportList');
+    if (reportList) {
+      reportList.innerHTML = categories.length
+        ? categories.slice(0, 5).map((row) => `<li><span>${esc(row.name)}</span><b>${money(row.amount)}</b></li>`).join('')
+        : '<li><span>No spending</span><b>0 MMK</b></li>';
+    }
+
+    renderTrendChart();
+    renderLoanBI();
+  }
+
+  function renderTrendChart() {
+    const canvas = $('chart');
+    if (!canvas || !canvas.getContext) return;
+
+    const rows = monthlyRows();
+    if (!rows.length) {
+      canvas.width = 0;
+      canvas.height = 0;
+      return;
+    }
+
+    const ctx = canvas.getContext('2d');
+    const width = Math.max(300, canvas.clientWidth || 600);
+    const height = 220;
+    canvas.width = width;
+    canvas.height = height;
+
+    ctx.clearRect(0, 0, width, height);
+
+    const max = Math.max(1, ...rows.flatMap((row) => [row.income, row.expense + row.credit]));
+    const step = width / Math.max(1, rows.length);
+
+    rows.forEach((row, index) => {
+      const x = step * index + step / 2;
+
+      const incomeHeight = (row.income / max) * 150;
+      const outflowHeight = ((row.expense + row.credit) / max) * 150;
+
+      const incomeX = x - 18;
+      const outflowX = x + 4;
+
+      ctx.fillStyle = '#34d399';
+      ctx.fillRect(incomeX, 175 - incomeHeight, 14, incomeHeight);
+
+      ctx.fillStyle = '#f97316';
+      ctx.fillRect(outflowX, 175 - outflowHeight, 14, outflowHeight);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(row.month.slice(5), x, 198);
     });
   }
 
-  function addBudget() {
-    const name = String($('budgetCategory')?.value || '').trim();
-    const amount = number($('budgetAmount')?.value);
-    const threshold = Number($('budgetThreshold')?.value || 80);
-    const month = String($('budgetMonth')?.value || getSelectedMonth());
-    const dueDate = String($('budgetDueDate')?.value || '');
+  function renderLoanBI() {
+    const host = $('loanBI');
+    if (!host) return;
 
-    if (!name) return toast('Select a category');
-    if (!amount || amount <= 0) return toast('Enter a valid budget amount');
+    const monthList = state.transactions.filter((tx) => monthOf(tx.date) === state.reportMonth);
+    const received = loanReceived(monthList);
+    const payback = loanPaybacks(monthList);
 
-    const exists = state.budgets.some((budget) => budget.name === name && budget.month === month);
-
-    if (exists) {
-      const current = state.budgets.find((budget) => budget.name === name && budget.month === month);
-      current.amount = amount;
-      current.threshold = threshold;
-      current.dueDate = dueDate;
-      current.updatedAt = new Date().toISOString();
-      toast('Budget updated');
-    } else {
-      state.budgets.push({
-        id: uid('budget'),
-        name,
-        amount,
-        threshold,
-        month,
-        dueDate,
-        createdAt: new Date().toISOString()
-      });
-      toast('Budget saved');
-    }
-
-    saveState();
-    renderAll();
+    host.innerHTML = `
+      <div class="loan-bi-grid">
+        <div class="loan-bi-stat">
+          <small>Loan received</small>
+          <strong>${money(received)}</strong>
+        </div>
+        <div class="loan-bi-stat">
+          <small>Loan payback</small>
+          <strong>${money(payback)}</strong>
+        </div>
+        <div class="loan-bi-stat">
+          <small>Outstanding</small>
+          <strong>${money(outstandingLoans())}</strong>
+        </div>
+      </div>
+    `;
   }
 
-  function handleSubmit(event) {
+  function renderTransactions() {
+    const body = $('rows');
+    if (!body) return;
+
+    body.innerHTML = state.transactions
+      .slice()
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      .map((tx) => `
+        <tr>
+          <td>${esc(tx.date || '')}</td>
+          <td>${esc(tx.category || 'General')}</td>
+          <td>${esc(tx.type || 'expense')}</td>
+          <td>${money(tx.amount)}</td>
+          <td>${esc(tx.note || '')}</td>
+          <td>
+            <button type="button" data-delete="${esc(tx.id)}">Delete</button>
+          </td>
+        </tr>
+      `).join('');
+  }
+
+  function renderCategories() {
+    const host = $('cats');
+    if (!host) return;
+
+    host.innerHTML = (state.categories || []).map((category, index) => `
+      <div class="row">
+        <span>${esc(category.name)} <small>${esc(category.type)}</small></span>
+        <button type="button" data-delete-category="${index}">Delete</button>
+      </div>
+    `).join('');
+  }
+
+  function renderBudgets() {
+    const host = $('budgets');
+    if (!host) return;
+
+    host.innerHTML = (state.budgets || []).map((budget, index) => `
+      <div class="row">
+        <span>${esc(budget.name)} <small>${monthLabel(budget.month || state.reportMonth)}</small></span>
+        <b>${money(budget.amount)}</b>
+        <button type="button" data-delete-budget="${index}">Delete</button>
+      </div>
+    `).join('');
+  }
+
+  function theme() {
+    const dark = state.settings.theme === 'dark';
+    document.body.classList.toggle('dark', dark);
+
+    const switchEl = $('switch');
+    if (switchEl) switchEl.classList.toggle('on', dark);
+  }
+
+  function api(action, payload) {
+    if (!state.settings.syncUrl) throw new Error('Add the Apps Script URL first.');
+    const response = await fetch(state.settings.syncUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...payload })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!result.ok) throw new Error(result.error || 'Sync failed.');
+    return result.data || result;
+  }
+
+  async function pull() {
+    if (syncing) return;
+    syncing = true;
+    try {
+      const data = await api('getAll');
+      if (data && Array.isArray(data.transactions)) state.transactions = data.transactions;
+      if (data && Array.isArray(data.categories)) state.categories = data.categories;
+      if (data && Array.isArray(data.budgets)) state.budgets = data.budgets;
+      if (data && Array.isArray(data.goals)) state.goals = data.goals;
+      if (data && Array.isArray(data.loans)) state.loans = data.loans;
+      state.settings.syncRevision = data.revision || state.settings.syncRevision;
+      save();
+      render();
+      toast('Pulled from Google Sheets');
+    } catch (error) {
+      toast(error.message || 'Sync failed');
+    } finally {
+      syncing = false;
+    }
+  }
+
+  async function push() {
+    if (syncing) return;
+    syncing = true;
+    try {
+      const data = await api('replaceAll', {
+        transactions: state.transactions,
+        categories: state.categories,
+        budgets: state.budgets,
+        goals: state.goals,
+        loans: state.loans
+      });
+
+      state.settings.syncRevision = data.revision || state.settings.syncRevision;
+      state.settings.lastSynced = new Date().toISOString();
+      save();
+      render();
+      toast('Pushed to Google Sheets');
+    } catch (error) {
+      toast(error.message || 'Sync failed');
+    } finally {
+      syncing = false;
+    }
+  }
+
+  function validateBudgetAndCategory() {
+    const type = state.currentType || 'expense';
+    const name = $('newCat') ? ($('newCat').value || '').trim() : '';
+    const typeSelect = $('newType') ? $('newType').value : 'expense';
+
+    if (name) {
+      const exists = state.categories.some((category) => {
+        return category.name.toLowerCase() === name.toLowerCase() && category.type === typeSelect;
+      });
+
+      if (exists) {
+        toast('Category already exists.');
+        return false;
+      }
+    }
+
+    const activeCategory = $('category') ? $('category').value : '';
+    if (type === 'payback' && !activeCategory) {
+      toast('Choose a loan repayment category.');
+      return false;
+    }
+
+    return true;
+  }
+
+  function bindUI() {
+    if ($('syncUrl')) $('syncUrl').value = state.settings.syncUrl || '';
+    if ($('month')) $('month').value = state.reportMonth || currentMonth;
+    if ($('monthSelect')) $('monthSelect').value = state.reportMonth || currentMonth;
+    renderCategories();
+    renderBudgets();
+  }
+
+  function render() {
+    normalizeState();
+    bindUI();
+    populateCategories();
+    renderLoanSelect();
+    updateMonthOptions();
+    renderHome();
+    renderReports();
+    renderBudgetAlerts();
+    renderTransactions();
+    theme();
+  }
+
+  document.addEventListener('click', (event) => {
+    const page = event.target.closest('[data-page]');
+    if (page) {
+      showPage(page.dataset.page);
+      return;
+    }
+
+    const add = event.target.closest('[data-add]');
+    if (add) {
+      setType(add.dataset.add);
+      showPage('add');
+      return;
+    }
+
+    const tab = event.target.closest('[data-type]');
+    if (tab) {
+      setType(tab.dataset.type);
+      showPage('add');
+      return;
+    }
+
+    const del = event.target.closest('[data-delete]');
+    if (del) {
+      const id = del.dataset.delete;
+      state.transactions = state.transactions.filter((tx) => String(tx.id) !== String(id));
+      save();
+      render();
+      return;
+    }
+
+    const delCategory = event.target.closest('[data-delete-category]');
+    if (delCategory) {
+      const index = Number(delCategory.dataset.deleteCategory);
+      if (!Number.isNaN(index)) {
+        state.categories.splice(index, 1);
+        save();
+        render();
+      }
+      return;
+    }
+
+    const delBudget = event.target.closest('[data-delete-budget]');
+    if (delBudget) {
+      const index = Number(delBudget.dataset.deleteBudget);
+      if (!Number.isNaN(index)) {
+        state.budgets.splice(index, 1);
+        save();
+        render();
+      }
+      return;
+    }
+
+    const syncButton = event.target.closest('#pull, [data-sync=\"pull\"]');
+    if (syncButton) {
+      pull();
+      return;
+    }
+
+    if (event.target.closest('#push, [data-sync=\"push\"]')) {
+      push();
+      return;
+    }
+
+    if (event.target.id === 'theme' || event.target.id === 'switch') {
+      state.settings.theme = state.settings.theme === 'dark' ? 'light' : 'dark';
+      save();
+      theme();
+      return;
+    }
+
+    if (event.target.id === 'addCat') {
+      const name = ($('newCat')?.value || '').trim();
+      const type = $('newType')?.value || 'expense';
+      if (!name) {
+        toast('Enter a category name');
+        return;
+      }
+
+      const exists = state.categories.some((category) => category.name.toLowerCase() === name.toLowerCase() && category.type === type);
+      if (exists) {
+        toast('Category already exists');
+        return;
+      }
+
+      state.categories.push({ name, type });
+      save();
+      render();
+      toast('Category added');
+      return;
+    }
+
+    if (event.target.id === 'addBudget') {
+      const name = ($('budgetName')?.value || '').trim();
+      const amount = num($('budgetAmount')?.value || 0);
+      const month = ($('budgetMonth')?.value || state.reportMonth || currentMonth).trim();
+
+      if (!name || amount <= 0) {
+        toast('Enter a valid budget name and amount');
+        return;
+      }
+
+      const entry = { name, amount, month };
+      const exists = state.budgets.some((budget) => budget.name === name && monthOf(budget.month) === month);
+      if (exists) {
+        toast('Budget already exists for this month');
+        return;
+      }
+
+      state.budgets.push(entry);
+      save();
+      render();
+      toast('Budget saved');
+      return;
+    }
+
+    if (event.target.id === 'clear') {
+      if (confirm('Clear all transactions?')) {
+        state.transactions = [];
+        state.loans = [];
+        state.budgets = [];
+        save();
+        render();
+      }
+      return;
+    }
+
+    if (event.target.id === 'export') {
+      const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'moneyflow-export.json';
+      link.click();
+      URL.revokeObjectURL(link.href);
+      return;
+    }
+  });
+
+  document.addEventListener('change', (event) => {
+    if (!event.target) return;
+
+    if (event.target.id === 'month' || event.target.id === 'monthSelect') {
+      state.reportMonth = event.target.value || currentMonth;
+      save();
+      render();
+      return;
+    }
+
+    if (event.target.id === 'syncUrl') {
+      state.settings.syncUrl = event.target.value.trim();
+      save();
+    }
+  });
+
+  document.addEventListener('submit', (event) => {
+    if (event.target.id !== 'form') return;
     event.preventDefault();
 
-    const amount = number($('amount')?.value);
-    if (amount <= 0) return toast('Enter an amount greater than 0');
+    const amount = num($('amount')?.value || 0);
+    if (amount <= 0) {
+      toast('Enter an amount greater than 0');
+      return;
+    }
 
     const type = state.currentType || 'expense';
-    const category = String($('category')?.value || 'General').trim();
-    const date = $('date')?.value || todayISO;
-    const note = String($('note')?.value || '').trim();
+    const date = $('date')?.value || today;
+    const note = ($('note')?.value || '').trim();
+    const category = $('category')?.value || 'General';
+
+    if (type !== 'loan' && !category) {
+      toast('Select a valid category');
+      return;
+    }
 
     const tx = {
       id: uid('tx'),
@@ -467,108 +859,66 @@
       date,
       category,
       note,
+      loanId: '',
       createdAt: new Date().toISOString()
     };
 
-    state.transactions.push(tx);
-    saveState();
-    event.target.reset();
+    if (type === 'loan') {
+      const loanId = uid('loan');
+      tx.type = 'income';
+      tx.category = 'Loan';
+      tx.loanId = loanId;
 
-    if ($('date')) $('date').value = todayISO;
-
-    renderAll();
-    toast(type === 'income' ? 'Income recorded' : type === 'expense' ? 'Expense recorded' : 'Credit payment added');
-  }
-
-  function clearAllTransactions() {
-    if (confirm('Clear all transactions?')) {
-      state.transactions = [];
-      state.budgets = [];
-      saveState();
-      renderAll();
-      toast('Data cleared');
-    }
-  }
-
-  document.addEventListener('click', (event) => {
-    const pageLink = event.target.closest('[data-page]');
-    if (pageLink) {
-      showPage(pageLink.dataset.page);
-      return;
-    }
-
-    const tab = event.target.closest('[data-type]');
-    if (tab) {
-      setType(tab.dataset.type);
-      return;
-    }
-
-    if (event.target.id === 'themeToggle') {
-      state.settings.theme = state.settings.theme === 'dark' ? 'light' : 'dark';
-      saveState();
-      renderTheme();
-      return;
-    }
-
-    if (event.target.id === 'switchTheme') {
-      state.settings.theme = state.settings.theme === 'dark' ? 'light' : 'dark';
-      saveState();
-      renderTheme();
-      return;
-    }
-
-    if (event.target.id === 'addBudgetBtn') {
-      addBudget();
-      return;
-    }
-
-    if (event.target.id === 'clearTransactionsBtn') {
-      clearAllTransactions();
-      return;
-    }
-  });
-
-  document.addEventListener('change', (event) => {
-    if (event.target.id === 'monthSelect') {
-      state.reportMonth = event.target.value;
-      saveState();
-      renderAll();
-      return;
-    }
-
-    if (event.target.id === 'budgetMonth') {
-      const value = event.target.value;
-      if (value) {
-        const month = value;
-        const budgetCategory = $('budgetCategory');
-        if (budgetCategory) {
-          budgetCategory.value = state.categories.find(cat => cat.type === 'expense')?.name || 'General';
-        }
-        state.reportMonth = month;
-        saveState();
-        renderAll();
+      state.loans.push({
+        id: loanId,
+        name: note || 'Loan',
+        principal: amount,
+        remaining: amount,
+        date,
+        note,
+        createdAt: tx.createdAt
+      });
+    } else if (type === 'payback') {
+      const selectedLoanId = $('loanSelect')?.value || '';
+      const loan = state.loans.find((item) => String(item.id) === String(selectedLoanId));
+      if (!loan) {
+        toast('Select an active loan to repay');
+        return;
       }
+
+      if (amount > num(loan.remaining)) {
+        toast('Payback cannot exceed remaining loan balance');
+        return;
+      }
+
+      tx.type = 'expense';
+      tx.category = 'Loan Repayment';
+      tx.loanId = selectedLoanId;
+      loan.remaining = Math.max(0, num(loan.remaining) - amount);
+    } else if (type === 'credit') {
+      tx.type = 'credit';
+    } else {
+      tx.type = type;
     }
+
+    state.transactions.push(tx);
+    save();
+    event.target.reset();
+    if ($('date')) $('date').value = today;
+    render();
+    toast(type === 'loan' ? 'Loan received and recorded as income' : type === 'payback' ? 'Loan payback recorded as expense' : 'Saved');
   });
 
-  document.addEventListener('submit', (event) => {
-    if (event.target.id === 'transactionForm') {
-      handleSubmit(event);
-    }
-  });
-
-  function initDefaults() {
-    if ($('date')) $('date').value = todayISO;
-    if ($('budgetMonth')) $('budgetMonth').value = currentMonth;
-    if ($('budgetDueDate')) $('budgetDueDate').value = '';
-    if ($('amount')) $('amount').value = '';
-    if ($('note')) $('note').value = '';
-    if ($('budgetAmount')) $('budgetAmount').value = '';
-    if ($('budgetThreshold')) $('budgetThreshold').value = '80';
-    setType('expense');
-    renderAll();
+  function init() {
+    normalizeState();
+    setType(state.currentType || 'expense');
+    render();
     showPage('home');
   }
 
-  initDefaults();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, { once: true });
+  } else {
+    init();
+  }
 })();
